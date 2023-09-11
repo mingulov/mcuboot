@@ -3,6 +3,7 @@ on:
     branches:
       - main
       - v*-branch
+  workflow_dispatch:
 
 name: imgtool
 
@@ -11,6 +12,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.x", "pypy3.9"]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pipenv'
+        cache-dependency-path: |
+          scripts/setup.py
+          scripts/requirements.txt
+    - name: Install dependencies
+      run: ./ci/imgtool-tests_install.sh
+    - name: Run tests
+      run: ./ci/imgtool-tests_run.sh
   environment:
     runs-on: ubuntu-latest
     steps:
