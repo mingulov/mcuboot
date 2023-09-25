@@ -67,10 +67,7 @@
 #include "boot_serial/boot_serial.h"
 #include "boot_serial_priv.h"
 #include "mcuboot_config/mcuboot_config.h"
-
-#ifdef MCUBOOT_ERASE_PROGRESSIVELY
-#include "bootutil_priv.h"
-#endif
+#include "../src/bootutil_priv.h"
 
 #ifdef MCUBOOT_ENC_IMAGES
 #include "boot_serial/boot_serial_encryption.h"
@@ -262,7 +259,11 @@ bs_list(char *buf, int len)
         int swap_status = boot_swap_type_multi(image_index);
 #endif
 
+#ifdef MCUBOOT_SINGLE_APPLICATION_SLOT
+        for (slot = 0; slot < 1; slot++) {
+#else
         for (slot = 0; slot < 2; slot++) {
+#endif
             FIH_DECLARE(fih_rc, FIH_FAILURE);
             uint8_t tmpbuf[64];
 
@@ -292,15 +293,24 @@ bs_list(char *buf, int len)
                                    fih_rc, image_index, slot);
                 if (FIH_EQ(fih_rc, FIH_BOOT_HOOK_REGULAR))
                 {
-#ifdef MCUBOOT_ENC_IMAGES
-                    if (IS_ENCRYPTED(&hdr)) {
+#if defined(MCUBOOT_ENC_IMAGES)
+                    if (IS_ENCRYPTED(&hdr) && MUST_DECRYPT(fap, image_index, &hdr)) {
                         FIH_CALL(boot_image_validate_encrypted, fih_rc, fap,
                                  &hdr, tmpbuf, sizeof(tmpbuf));
                     } else {
+                        if (IS_ENCRYPTED(&hdr)) {
+                            /*
+                             * There is an image present which has an encrypted flag set but is
+                             * not encrypted, therefore remove the flag from the header and run a
+                             * normal image validation on it.
+                             */
+                            hdr.ih_flags &= ~ENCRYPTIONFLAGS;
+                        }
 #endif
+
                         FIH_CALL(bootutil_img_validate, fih_rc, NULL, 0, &hdr,
                                  fap, tmpbuf, sizeof(tmpbuf), NULL, 0, NULL);
-#ifdef MCUBOOT_ENC_IMAGES
+#if defined(MCUBOOT_ENC_IMAGES)
                     }
 #endif
                 }
@@ -1192,6 +1202,10 @@ boot_serial_read_console(const struct boot_uart_funcs *f,int timeout_in_ms)
     int max_input;
     int elapsed_in_ms = 0;
 
+#ifndef MCUBOOT_SERIAL_WAIT_FOR_DFU
+    bool allow_idle = true;
+#endif
+
     boot_uf = f;
     max_input = sizeof(in_buf);
 
@@ -1203,7 +1217,10 @@ boot_serial_read_console(const struct boot_uart_funcs *f,int timeout_in_ms)
          * from serial console (if single-thread mode is used).
          */
 #ifndef MCUBOOT_SERIAL_WAIT_FOR_DFU
-        MCUBOOT_CPU_IDLE();
+        if (allow_idle == true) {
+            MCUBOOT_CPU_IDLE();
+            allow_idle = false;
+        }
 #endif
         MCUBOOT_WATCHDOG_FEED();
 #ifdef MCUBOOT_SERIAL_WAIT_FOR_DFU
@@ -1211,6 +1228,9 @@ boot_serial_read_console(const struct boot_uart_funcs *f,int timeout_in_ms)
 #endif
         rc = f->read(in_buf + off, sizeof(in_buf) - off, &full_line);
         if (rc <= 0 && !full_line) {
+#ifndef MCUBOOT_SERIAL_WAIT_FOR_DFU
+            allow_idle = true;
+#endif
             goto check_timeout;
         }
         off += rc;
